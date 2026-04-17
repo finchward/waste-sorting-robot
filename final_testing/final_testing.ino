@@ -5,7 +5,11 @@
   const int centerMOE = 80;
   const int minSizeForStage1 = 130;
   const int minSize = 30; 
-  const float reverseThreshold = 15; //cm
+  const float reverseDistThreshold = 15; //cm
+  const float ballDistThreshold = 10;
+  const float baseDistThreshold = 15;
+  const int clawTime = 1000;
+  const int rammingTime = 500;
 
   const int redLED = 2;
   const int greenLED = 2;
@@ -20,9 +24,19 @@
   const int pwmMotorB = 9;
   const int dirMotorB = 7;
 
-  const int basePlateSignature = 4;
+  const int orangePlateSig = 4;
+  const int pinkPlateSig = 4;
+  const int purplePlateSig = 4;
+  const int yellowPlateSig = 4;
 
-  int stage = 0;
+  const int basePlate = pinkPlateSig;
+
+  const int redBallSig = -1;
+  const int greenBallSig = -1;
+  const int blueBallSig = -1;
+
+  int stage = 1;
+  int desiredBallIdx = 0;
   Pixy2 pixy;
   long lastPingTime = 0;
   float currentDistance = 0;
@@ -40,20 +54,48 @@
     pixy.init();
   }
 
-  Block* getClosestBall(){
+  Block* getClosestBall(desiredBallIdx){
     int bestBlockIdx = -1;
+
+    int desiredSig;
+    if (desiredBallIdx == 0){
+      desiredSig = redballSig;
+    } else if (desiredBallIdx == 1){
+      desiredSig = greenBallSig;
+    } else if (desiredBallIdx == 2){
+      desiredSig = blueBallSig;
+    }
+
     if (pixy.ccc.numBlocks) {
 
       for (int i = 0; i < pixy.ccc.numBlocks; i++){
         Block currentBlock = pixy.ccc.blocks[i];
         bool isCloseEnough = (currentBlock.m_width > minSize) && (currentBlock.m_height > minSize);
         if (isCloseEnough) {
-          if (bestBlockIdx == -1 || currentBlock.m_width > pixy.ccc.blocks[bestBlockIdx].m_width){
+          if (currentBlock.m_signature == desiredSig && (bestBlockIdx == -1 || currentBlock.m_width > pixy.ccc.blocks[bestBlockIdx].m_width)){
             bestBlockIdx = i;
           }
         }
       }
       if (bestBlockIdx != -1) {
+        return &(pixy.ccc.blocks[bestBlockIdx]);
+      }
+    }
+    return nullptr;
+  }
+
+  Block* findBasePlate(){
+    int bestBlockIdx = -1;
+      if (pixy.ccc.numBlocks) {
+        for (int i = 0; i < pixy.ccc.numBlocks; i++){
+          Block currentBlock = pixy.ccc.blocks[i];
+          if (currentBlock.m_signature == 4  && currentBlock.m_width > 15) {
+            if (bestBlockIdx == -1 || currentBlock.m_width > pixy.ccc.blocks[bestBlockIdx].m_width){
+              bestBlockIdx = i;
+            }
+          }
+        }
+        if (bestBlockIdx != -1) {
         return &(pixy.ccc.blocks[bestBlockIdx]);
       }
     }
@@ -70,14 +112,11 @@
     }
 
   void roam(){
-    //go forward, if we are approaching wall reverse and turn.
-    powerWheels(1, 1);
-    // Serial.println(currentDistance);
-    // if (currentDistance > reverseThreshold || currentDistance == -1){
-    //   powerWheels(1, 1);
-    // } else {
-    //   powerWheels(0, -1);
-    // }
+    if (currentDistance > reverseDistThreshold || currentDistance == -1){
+      powerWheels(1, 1);
+    } else {
+      powerWheels(1, -1);
+    }
   }
 
   void navigate_towards_block(Block block){
@@ -110,64 +149,55 @@
     }
   }
 
-unsigned long timeSinceFinish = 0;
+void closeClaws(){
+
+}
+
+void openClaws(){
+
+}
 
 bool headingTowardsBase = false;
-unsigned long timeSinceBaseSeen;
+
   // get largest one, steer towards it.
   void loop() {
-    pixy.ccc.getBlocks();
+    pixy.ccc.getBlocks(); 
     getDistance();
 
-    if (stage == 0){
-      Block* ball_detected = getClosestBall();
+    if (stage == 1){
+      Block* ball_detected = getClosestBall(desiredBallIdx);
       if (ball_detected == nullptr){
         roam();
-      // } else if ((*ball_detected).m_width > minSizeForStage1) {
-      //     powerWheels(0, 0);
-      //     stage = 1;
-      //     timeSinceFinish = millis();
-      // } else {
-      } else if (currentDistance < 10){
+      } else if (currentDistance < ballDistThreshold){
         powerWheels(0, 0);
-        stage = 1;
-        timeSinceFinish = millis();
+        closeClaws();
+        stage = 2;
       } else {
         navigate_towards_block(*ball_detected);
       }
-    } else if (stage == 1){
-      int bestBlockIdx = -1;
-      if (pixy.ccc.numBlocks) {
-        for (int i = 0; i < pixy.ccc.numBlocks; i++){
-          Block currentBlock = pixy.ccc.blocks[i];
-          if (currentBlock.m_signature == 4  && currentBlock.m_width > 15) {
-            if (bestBlockIdx == -1 || currentBlock.m_width > pixy.ccc.blocks[bestBlockIdx].m_width){
-              bestBlockIdx = i;
-            }
-          }
+    } else if (stage == 2){
+      Block* base_detected = findBasePlate();
+      if (headingTowardsBase == true){
+        if (currentDistance < baseDistThreshold) {
+          openClaws();
+          powerWheels(1, 1);
+          delay(rammingTime);
+          powerWheels(0, 0);
+          delay(rammingTime);
+          desiredBallIdx = (desiredBallIdx + 1) % 3;
+          stage = 1;
         }
       }
-      if (bestBlockIdx != -1) {
+
+      if (base_detected !== nullptr){
         if (!headingTowardsBase){
           headingTowardsBase = true;
-          timeSinceBaseSeen = millis();
         }
         navigate_towards_block(pixy.ccc.blocks[bestBlockIdx]);
       } else if (headingTowardsBase == true) {
         powerWheels(1, 1);
-        if (millis() - timeSinceBaseSeen > 10000){
-          powerWheels(0, 0);
-          stage = 2;
-          timeSinceFinish = millis();
-        }
       } else {
-        powerWheels(1, -0.9); // spin until we see it
-      }
-    } else {
-      if (millis() - timeSinceFinish > 10000) {
-        stage = 0;
-        timeSinceFinish = 0;
-        headingTowardsBase = false;
+        powerWheels(1, -0.9);
       }
 
     }
