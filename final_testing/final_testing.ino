@@ -6,6 +6,7 @@
     const int centerMOE = 80;
     const int minSizeForStage1 = 130;
     const int minSize = 30; 
+    const int maxBasePlateDepthDownPage = 180;
     const float reverseDistThreshold = 15; //cm
     const float ballDistThreshold = 10;
     const float baseDistThreshold = 15;
@@ -35,15 +36,15 @@
     const int servoLeftPin = A3; //analog
     Servo servoR;
     Servo servoL;
-    const int clawOpenAngle = 30;
-    const int clawClosedAngle = 150;
+    const int clawOpenAngle = 170;
+    const int clawClosedAngle = 100;
 
     const int orangePlateSig = 4;
     const int pinkPlateSig = 4;
     const int purplePlateSig = 4;
     const int yellowPlateSig = 4;
 
-    const int basePlate = pinkPlateSig;
+    const int basePlate = purplePlateSig;
 
     const int redBallSig = 1;
     const int greenBallSig = 2;
@@ -138,7 +139,7 @@
         if (pixy.ccc.numBlocks) {
           for (int i = 0; i < pixy.ccc.numBlocks; i++){
             Block currentBlock = pixy.ccc.blocks[i];
-            if (currentBlock.m_signature == 4  && currentBlock.m_width > 15) {
+            if (currentBlock.m_signature == 4  && currentBlock.m_width > 15 && currentBlock.m_y < maxBasePlateDepthDownPage) {
               if (bestBlockIdx == -1 || currentBlock.m_width > pixy.ccc.blocks[bestBlockIdx].m_width){
                 bestBlockIdx = i;
               }
