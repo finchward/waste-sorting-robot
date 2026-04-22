@@ -1,18 +1,28 @@
 #include <Pixy2.h>
 #include <Servo.h>
 
-const int base_speed = 100; // 0 to 255
+const int base_speed = 120; // 0 to 255
 const int pingInterval = 50;
-const int minSize = 5; 
+const int minSize = 10; 
 const float reverseDistThreshold = 15; //cm
-const float ballDistThreshold = 6;
-const float baseDistThreshold = 5;
+const float ballDistThreshold = 5;
+const float baseDistThreshold = 12;
+const int maxBasePlateDepthDownPage = 140;
 const float baseSenditThreshold = 30;
 const float turnStrength = 0.8; //[0, 1]
 const int clawTime = 1000;
 
-const int reversingTime = 500;
-const int rammingTime = 800;
+const int ballOverrideWallStoppingThreshold = 20;
+
+const int startingServoAngle = 70;
+
+const int topScreenThreshold = 40;  // Max Y value to confirm the ball is in the claws
+const int verifyReverseTime = 1000; // Milliseconds to reverse on failed grab
+const int verifyRotateTime = 300;   // Milliseconds to rotate right on failed grab
+
+const int startingTime = 2500;
+const int reversingTime = 1000;
+const int rammingTime = 2000;
 const int rechargingTime = 3000;
 const int spinningTime = 2000;
 
@@ -39,22 +49,23 @@ const int servoRightPin = A5; //analog
 const int servoLeftPin = A3; //analog
 Servo servoR;
 Servo servoL;
-const int clawOpenAngle = 50;
-const int clawClosedAngle = 0;
+const int clawOpenAngle = 170;
+const int clawClosedAngle = 100;
 
 const int orangePlateSig = 5;
 const int pinkPlateSig = 4;
 const int purplePlateSig = 6;
 const int yellowPlateSig = 7;
 
-const int basePlate = purplePlateSig;
+const int basePlate = pinkPlateSig;
 
 const int redBallSig = 1;
 const int greenBallSig = 2;
 const int blueBallSig = 3;
 
 int stage = 1;
-int desiredBallIdx = 0;
+int desiredBallIdx = 0; //0 is red, 1 is green, 2 is blue
+const bool collectMultipleColors = true;
 Pixy2 pixy;
 long lastPingTime = 0;
 float ballCurrentDistance = 0;
@@ -87,10 +98,13 @@ void setup() {
   pinMode(ballEchoPin, INPUT);
   pinMode(wallTrigPin, OUTPUT);
   pinMode(wallEchoPin, INPUT);
+
+  pinMode(redLED, OUTPUT);
+  pinMode(greenLED, OUTPUT);
+  pinMode(blueLED, OUTPUT);
   servoR.attach(servoRightPin);
   servoL.attach(servoLeftPin);
   pixy.init();
-  openClaws();
 }
 
 bool headingTowardsBase = false;
@@ -126,7 +140,7 @@ Block* getClosestBall(int desiredBallIdx){
 
     for (int i = 0; i < pixy.ccc.numBlocks; i++){
       Block currentBlock = pixy.ccc.blocks[i];
-      bool isCloseEnough = (currentBlock.m_width > minSize) && (currentBlock.m_height > minSize);
+      bool isCloseEnough = (currentBlock.m_width > minSize) && (currentBlock.m_height > minSize) && currentBlock.m_y < maxBasePlateDepthDownPage;
       if (isCloseEnough) {
         if (currentBlock.m_signature == desiredSig && (bestBlockIdx == -1 || currentBlock.m_width > pixy.ccc.blocks[bestBlockIdx].m_width)){
           bestBlockIdx = i;
@@ -145,19 +159,18 @@ Block* findBasePlate(){
     if (pixy.ccc.numBlocks) {
       for (int i = 0; i < pixy.ccc.numBlocks; i++){
         Block currentBlock = pixy.ccc.blocks[i];
-        if (currentBlock.m_signature == basePlate  && currentBlock.m_width > 15) {
+        if (currentBlock.m_signature == basePlate  && currentBlock.m_width > 15 && currentBlock.m_y < maxBasePlateDepthDownPage) {
           if (bestBlockIdx == -1 || currentBlock.m_width > pixy.ccc.blocks[bestBlockIdx].m_width){
             bestBlockIdx = i;
           }
         }
       }
       if (bestBlockIdx != -1) {
-        Serial.print("Found base plate at x=");
         Serial.println((float)pixy.ccc.blocks[bestBlockIdx].m_x / 315.0);
       return &(pixy.ccc.blocks[bestBlockIdx]);
     }
   }
-  Serial.println("Didn't find base plate");
+
   return nullptr;
 }
 
@@ -255,50 +268,127 @@ void getDistance() {
       wallCurrentDistance = (wallDuration * 0.0343) / 2.0;
     }
 
-    Serial.println(wallCurrentDistance);
+    Serial.println(ballCurrentDistance);
   }
 }
+
+bool verifyGrabSuccess(int desiredIdx) {
+  int desiredSig;
+  if (desiredIdx == 0) {
+    desiredSig = redBallSig;
+  } else if (desiredIdx == 1) {
+    desiredSig = greenBallSig;
+  } else if (desiredIdx == 2) {
+    desiredSig = blueBallSig;
+  }  
+  bool grabSuccessful = false;
+  
+  if (pixy.ccc.numBlocks) {
+    for (int i = 0; i < pixy.ccc.numBlocks; i++) {
+      Block currentBlock = pixy.ccc.blocks[i];
+      // Check if the block matches the signature AND is at the top of the screen
+      if (currentBlock.m_signature == desiredSig && currentBlock.m_y <= topScreenThreshold) {
+        grabSuccessful = true;
+        break;
+      }
+    }
+  }
+
+  if (!grabSuccessful) {
+    Serial.println("Grab failed! Retrying...");
+    openClaws();
+    
+    // Reverse
+    powerWheels(-1, -1);
+    delay(verifyReverseTime);
+    
+    // Rotate Right
+    powerWheels(1, -1);
+    delay(verifyRotateTime);
+    
+    // Stop motors after the evasive maneuver
+    powerWheels(0, 0); 
+  }
+
+  return grabSuccessful;
+}
+
+bool is_on = false;
+unsigned long buttonHoldStartTime = 0; // Tracks when the 3-second countdown starts
+bool buttonTiming = false;             // Keeps track of whether we are currently timing
 // get largest one, steer towards it.
 void loop() {
-  // if (digitalRead(buttonPin) == LOW) {
-  //   resetRobot();
-  // }
+  if (!is_on) {
+    servoR.write(startingServoAngle);
+    servoL.write(180 - startingServoAngle);
+    // Check if the button is HIGH
+    if (digitalRead(buttonPin) == HIGH) {
+      if (!buttonTiming) {
+        // The button just went HIGH, start the timer
+        buttonHoldStartTime = millis();
+        buttonTiming = true;
+      } else if (millis() - buttonHoldStartTime >= 3000) {
+        // The button has been HIGH continuously for 3000ms (3 seconds)
+        is_on = true; 
+        setLEDColor(1);
+        openClaws();
+        Serial.println("Startup complete. Robot is ON!");
+        powerWheels(1,1);
+        delay(startingTime);
+      }
+    } else {
+      // If the button drops back to LOW, reset the timer
+      buttonTiming = false;
+    }
+    
+    // Return early so the rest of the loop doesn't run until is_on is true
+    return; 
+  }
+
   pixy.ccc.getBlocks(); 
   getDistance();
 
   if (stage == 1){
     setLEDColor(1);
     Block* ball_detected = getClosestBall(desiredBallIdx);
-    if (wallCurrentDistance < reverseDistThreshold || wallCurrentDistance == -1){
+    if ((wallCurrentDistance < reverseDistThreshold && wallCurrentDistance != -1) && !(ball_detected != nullptr && (*ball_detected).m_width > ballOverrideWallStoppingThreshold)){
         powerWheels(-1, -1);
     } else{
       if (ballCurrentDistance < ballDistThreshold && ballCurrentDistance != -1){
         Serial.println("Grabbing");
-        setLEDColor(3);
+        setLEDColor(2);
         powerWheels(0, 0);
         closeClaws();
-        stage = 2;
+
+        if (verifyGrabSuccess(desiredBallIdx)) {
+          stage = 2;
+        }
       } else if (ball_detected == nullptr){
         powerWheels(1.2, -1.2);
       } else {
-        setLEDColor(2);
         navigate_towards_block(*ball_detected);
         }
     }
   } else if (stage == 2){
+    setLEDColor(3);
     Block* base_detected = findBasePlate();
     if (headingTowardsBase == true && wallCurrentDistance < baseDistThreshold && wallCurrentDistance != -1) {
       Serial.println("Base arrived");
       openClaws();
       powerWheels(-1, -1);
       delay(reversingTime);
+      powerWheels(0, 0);
+      closeClaws();
       powerWheels(2, 2);
       delay(rammingTime);
-      desiredBallIdx = (desiredBallIdx + 1) % 3;
+      if (collectMultipleColors == true){
+        desiredBallIdx = (desiredBallIdx + 1) % 3;
+      }
       stage = 1;
       headingTowardsBase = false;
       powerWheels(-1, -1);
       delay(rechargingTime);
+      openClaws();
     }
     else if (headingTowardsBase == true && wallCurrentDistance <= baseSenditThreshold && wallCurrentDistance != -1){
         Serial.println("Sending it towards base");
@@ -308,10 +398,8 @@ void loop() {
         headingTowardsBase = true;
       }
       navigate_towards_block(*base_detected);
-      setLEDColor(2);
       Serial.println("Heading towards base in sight");
     }else {
-      setLEDColor(1);
       Serial.println("Finding base");
       powerWheels(1, -1);
       }
