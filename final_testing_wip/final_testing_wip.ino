@@ -1,10 +1,10 @@
 #include <Pixy2.h>
 #include <Servo.h>
 
-const int base_speed = 120; // 0 to 255
+const int base_speed = 180; // 0 to 255
 const int pingInterval = 50;
 const int minSize = 10; 
-const float reverseDistThreshold = 45; //cm
+const float reverseDistThreshold = 10; //cm
 const float ballDistThreshold = 5;
 const float baseDistThreshold = 12;
 const int maxBasePlateDepthDownPage = 160;
@@ -440,7 +440,7 @@ void loop() {
     
     if ((wallCurrentDistance < reverseDistThreshold && wallCurrentDistance != -1)) {//&& !(ball_detected != nullptr && (*ball_detected).m_width > ballOverrideWallStoppingThreshold)){
         Serial.println(wallCurrentDistance - ballCurrentDistance);
-        if (ball_detected != nullptr && (wallCurrentDistance - ballCurrentDistance > 4)){
+        if (ball_detected != nullptr && (wallCurrentDistance - ballCurrentDistance > 2.5)){
           powerWheels(-1, 1);
           delay(1000);
         }
@@ -496,7 +496,7 @@ void loop() {
       delay(reversingTime);
       powerWheels(0, 0);
       closeClaws();
-      powerWheels(2, 2);
+      powerWheels(1.3, 1.3);
       delay(rammingTime);
       if (collectMultipleColors == true){
         desiredBallIdx = (desiredBallIdx + 1) % 3;
